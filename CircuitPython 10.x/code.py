@@ -6,6 +6,8 @@ import time
 
 import alarm
 import json
+import microcontroller
+import rtc
 import ssl
 import socketpool
 import wifi
@@ -99,10 +101,6 @@ battery_label = label.Label(
     font=arial, x=250, y=115, color=0x000000, line_spacing=LINE_SPACING
 )
 splash.append(battery_label)
-
-print(f"Connecting to {ssid}")
-wifi.radio.connect(ssid, password)
-print(f"Connected to {ssid}!")
 
 
 def get_width(font, text):
@@ -206,12 +204,49 @@ def get_local_time():
     ssock.close()
     body = raw.decode().split("\r\n\r\n", 1)[1]
     data = json.loads(body)
+    # Set the RTC so subsequent wakes can use it
+    r = rtc.RTC()
+    r.datetime = time.struct_time((
+        data["year"], data["mon"], data["mday"],
+        data["hour"], data["min"], data["sec"],
+        data["wday"], data["yday"], -1
+    ))
+    # Save today's date to NVM: [year_hi, year_lo, month, day]
+    nvm = microcontroller.nvm
+    nvm[0] = data["year"] >> 8
+    nvm[1] = data["year"] & 0xFF
+    nvm[2] = data["mon"]
+    nvm[3] = data["mday"]
     return data["hour"], data["min"], data["sec"]
 
 
-# Get current local time
-hour, minute, sec = get_local_time()
-print(f"{hour:02}:{minute:02}:{sec:02}")
+def get_nvm_date():
+    """Read the saved date from NVM. Returns (year, month, day)."""
+    nvm = microcontroller.nvm
+    year = (nvm[0] << 8) | nvm[1]
+    return year, nvm[2], nvm[3]
+
+
+# Check if the RTC date matches the date saved in NVM
+rtc_now = time.localtime()
+nvm_year, nvm_month, nvm_day = get_nvm_date()
+if (rtc_now.tm_year == nvm_year and rtc_now.tm_mon == nvm_month
+        and rtc_now.tm_mday == nvm_day):
+    # RTC is trustworthy, use it directly
+    hour, minute, sec = rtc_now.tm_hour, rtc_now.tm_min, rtc_now.tm_sec
+    print(f"RTC time: {hour:02}:{minute:02}:{sec:02}")
+else:
+    # Date mismatch — fetch from internet and sync RTC
+    try:
+        print(f"Connecting to {ssid}")
+        wifi.radio.connect(ssid, password)
+        print(f"Connected to {ssid}!")
+        hour, minute, sec = get_local_time()
+        print(f"Fetched time: {hour:02}:{minute:02}:{sec:02}")
+    except (OSError, RuntimeError, ValueError) as e:
+        print(f"Failed to fetch time: {e}, sleeping 60s")
+        time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + 60)
+        alarm.exit_and_deep_sleep_until_alarms(time_alarm)
 
 hour_min = f"{hour:02}:{minute:02}"
 if hour_min in quotes:
