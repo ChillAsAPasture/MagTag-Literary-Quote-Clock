@@ -4,13 +4,11 @@
 from os import getenv
 import time
 
+import alarm
+import json
 import ssl
-import gc
 import socketpool
 import wifi
-import adafruit_minimqtt.adafruit_minimqtt as MQTT
-from adafruit_io.adafruit_io import IO_MQTT
-import adafruit_datetime
 import adafruit_display_text
 from adafruit_display_text import label
 import board
@@ -25,16 +23,15 @@ ssid = getenv("CIRCUITPY_WIFI_SSID")
 password = getenv("CIRCUITPY_WIFI_PASSWORD")
 aio_username = getenv("ADAFRUIT_AIO_USERNAME")
 aio_key = getenv("ADAFRUIT_AIO_KEY")
+tz = getenv("TIMEZONE")
 
-if None in [ssid, password, aio_username, aio_key]:
+if None in [ssid, password, aio_username, aio_key, tz]:
     raise RuntimeError(
         "WiFi and Adafruit IO settings are kept in settings.toml, "
         "please add them there. The settings file must contain "
         "'CIRCUITPY_WIFI_SSID', 'CIRCUITPY_WIFI_PASSWORD', "
-        "'ADAFRUIT_AIO_USERNAME' and 'ADAFRUIT_AIO_KEY' at a minimum."
+        "'ADAFRUIT_AIO_USERNAME', 'ADAFRUIT_AIO_KEY' and 'TIMEZONE'."
     )
-
-UTC_OFFSET = -4
 
 quotes = {}
 with open("quotes.csv", "r", encoding="UTF-8") as F:
@@ -125,14 +122,6 @@ def smart_split(text, font, width):
     return text
 
 
-def connected(client):  # pylint: disable=unused-argument
-    io.subscribe_to_time("iso")
-
-
-def disconnected(client):  # pylint: disable=unused-argument
-    print("Disconnected from Adafruit IO!")
-
-
 def update_text(hour_min):
     quote.text = (
         time_label.text
@@ -193,60 +182,56 @@ def update_text(hour_min):
     display.refresh()
 
 
-LAST = None
+def get_local_time():
+    """Fetch local time from Adafruit IO using the configured timezone."""
+    pool = socketpool.SocketPool(wifi.radio)
+    host = "io.adafruit.com"
+    path = f"/api/v2/{aio_username}/integrations/time/struct.json?x-aio-key={aio_key}&tz={tz}"
+    ctx = ssl.create_default_context()
+    sock = pool.socket(pool.AF_INET, pool.SOCK_STREAM)
+    sock.settimeout(10)
+    ssock = ctx.wrap_socket(sock, server_hostname=host)
+    ssock.connect((host, 443))
+    ssock.send(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
+    raw = b""
+    buf = bytearray(1024)
+    while True:
+        try:
+            n = ssock.recv_into(buf)
+            if n == 0:
+                break
+            raw += bytes(buf[:n])
+        except OSError:
+            break
+    ssock.close()
+    body = raw.decode().split("\r\n\r\n", 1)[1]
+    data = json.loads(body)
+    return data["hour"], data["min"], data["sec"]
 
 
-def message(client, feed_id, payload):  # pylint: disable=unused-argument
-    global LAST  # pylint: disable=global-statement
-    timezone = adafruit_datetime.timezone.utc
-    timezone._offset = adafruit_datetime.timedelta(  # pylint: disable=protected-access
-        seconds=UTC_OFFSET * 3600
-    )
-    datetime = adafruit_datetime.datetime.fromisoformat(payload[:-1]).replace(
-        tzinfo=timezone
-    )
-    local_datetime = datetime.tzinfo.fromutc(datetime)
-    print(local_datetime)
-    hour_min = f"{local_datetime.hour:02}:{local_datetime.minute:02}"
-    if local_datetime.minute != LAST:
-        if hour_min in quotes:
-            update_text(hour_min)
+# Get current local time
+hour, minute, sec = get_local_time()
+print(f"{hour:02}:{minute:02}:{sec:02}")
 
-    LAST = local_datetime.minute
-    gc.collect()
+hour_min = f"{hour:02}:{minute:02}"
+if hour_min in quotes:
+    update_text(hour_min)
 
+# Find the next hour_min that has a quote
+current_minutes = hour * 60 + minute
+sleep_seconds = None
+for offset in range(1, 1441):  # check up to 24 hours ahead
+    candidate = (current_minutes + offset) % 1440
+    h, m = divmod(candidate, 60)
+    key = f"{h:02}:{m:02}"
+    if key in quotes:
+        sleep_seconds = offset * 60 - sec
+        print(f"Next quote at {key}, sleeping {sleep_seconds}s ({offset}m)")
+        break
 
-# Create a socket pool
-pool = socketpool.SocketPool(wifi.radio)
+if sleep_seconds is None:
+    sleep_seconds = 60 - sec
+    print(f"No upcoming quotes found, sleeping {sleep_seconds}s")
 
-# Initialize a new MQTT Client object
-mqtt_client = MQTT.MQTT(
-    broker="io.adafruit.com",
-    port=1883,
-    username=aio_username,
-    password=aio_key,
-    socket_pool=pool,
-    ssl_context=ssl.create_default_context(),
-)
-
-# Initialize an Adafruit IO MQTT Client
-io = IO_MQTT(mqtt_client)
-
-# Connect the callback methods defined above to Adafruit IO
-io.on_connect = connected
-io.on_disconnect = disconnected
-io.on_message = message
-
-# Connect to Adafruit IO
-print("Connecting to Adafruit IO...")
-io.connect()
-
-while True:
-    try:
-        io.loop()
-    except (ValueError, RuntimeError) as e:
-        print("Failed to get data, retrying\n", e)
-        wifi.reset()
-        io.reconnect()
-        continue
-    time.sleep(1)
+time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + sleep_seconds)
+alarm.exit_and_deep_sleep_until_alarms(time_alarm)
