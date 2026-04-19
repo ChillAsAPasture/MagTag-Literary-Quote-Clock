@@ -98,7 +98,7 @@ author_label = label.Label(
 splash.append(author_label)
 
 battery_label = label.Label(
-    font=arial, x=250, y=115, color=0x000000, line_spacing=LINE_SPACING
+    font=arial, x=250, y=115, color=0xAAAAAA, line_spacing=LINE_SPACING
 )
 splash.append(battery_label)
 
@@ -120,10 +120,11 @@ def smart_split(text, font, width):
     return text
 
 
-def update_text(hour_min):
+def update_text(hour_min, show_battery=False):
     quote.text = (
         time_label.text
     ) = time_label_2.text = after_label.text = after_label_2.text = ""
+    battery_label.text = ""
 
     before, time_text, after = quotes[hour_min][0].split("^")
     text = adafruit_display_text.wrap_text_to_pixels(before, 276, font=arial)
@@ -169,13 +170,14 @@ def update_text(hour_min):
         author, 276, font=arial
     )
     author_label.text = "\n".join(wrapped_author)
-    battery_pin = analogio.AnalogIn(board.VOLTAGE_MONITOR)
-    voltage = (battery_pin.value * 3.3) / 65536 * 2
-    battery_pin.deinit()
-    pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
-    print(f"Battery: {voltage:.2f}V ({pct}%)")
-    battery_label.text = f"{pct}%"
-    battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
+    if show_battery:
+        battery_pin = analogio.AnalogIn(board.VOLTAGE_MONITOR)
+        voltage = (battery_pin.value * 3.3) / 65536 * 2
+        battery_pin.deinit()
+        pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
+        print(f"Battery: {voltage:.2f}V ({pct}%)")
+        battery_label.text = f"{pct}%"
+        battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
     time.sleep(display.time_to_refresh + 0.1)
     display.refresh()
 
@@ -248,12 +250,22 @@ else:
         time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + 60)
         alarm.exit_and_deep_sleep_until_alarms(time_alarm)
 
+current_minutes = hour * 60 + minute
 hour_min = f"{hour:02}:{minute:02}"
 if hour_min in quotes:
     update_text(hour_min)
+else:
+    # Find the most recent quote before now
+    for offset in range(1, 1441):
+        candidate = (current_minutes - offset) % 1440
+        h, m = divmod(candidate, 60)
+        key = f"{h:02}:{m:02}"
+        if key in quotes:
+            print(f"No quote at {hour_min}, showing most recent: {key}")
+            update_text(key, show_battery=True)
+            break
 
 # Find the next hour_min that has a quote
-current_minutes = hour * 60 + minute
 sleep_seconds = None
 for offset in range(1, 1441):  # check up to 24 hours ahead
     candidate = (current_minutes + offset) % 1440
@@ -269,4 +281,8 @@ if sleep_seconds is None:
     print(f"No upcoming quotes found, sleeping {sleep_seconds}s")
 
 time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + sleep_seconds)
-alarm.exit_and_deep_sleep_until_alarms(time_alarm)
+pin_alarm = alarm.pin.PinAlarm(pin=board.D11, value=False, pull=True)
+pin_alarm_2 = alarm.pin.PinAlarm(pin=board.D12, value=False, pull=True)
+pin_alarm_3 = alarm.pin.PinAlarm(pin=board.D14, value=False, pull=True)
+pin_alarm_4 = alarm.pin.PinAlarm(pin=board.D15, value=False, pull=True)
+alarm.exit_and_deep_sleep_until_alarms(time_alarm, pin_alarm, pin_alarm_2, pin_alarm_3, pin_alarm_4)
