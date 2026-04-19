@@ -250,9 +250,9 @@ else:
         hour, minute, sec = get_local_time()
         print(f"Fetched time: {hour:02}:{minute:02}:{sec:02}")
     except (OSError, RuntimeError, ValueError) as e:
-        print(f"Failed to fetch time: {e}, sleeping 60s")
-        time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + 60)
-        alarm.exit_and_deep_sleep_until_alarms(time_alarm)
+        print(f"Failed to fetch time: {e}, using RTC value")
+        hour, minute, sec = rtc_now.tm_hour, rtc_now.tm_min, rtc_now.tm_sec
+        print(f"RTC time: {hour:02}:{minute:02}:{sec:02}")
 
 current_minutes = hour * 60 + minute
 hour_min = f"{hour:02}:{minute:02}"
