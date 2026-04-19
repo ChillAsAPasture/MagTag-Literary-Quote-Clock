@@ -14,6 +14,7 @@ import adafruit_datetime
 import adafruit_display_text
 from adafruit_display_text import label
 import board
+import analogio
 from adafruit_bitmap_font import bitmap_font
 import displayio
 from adafruit_display_shapes.rect import Rect
@@ -93,9 +94,14 @@ after_label_2 = label.Label(
 splash.append(after_label_2)
 
 author_label = label.Label(
-    font=arial, x=QUOTE_X, y=115, color=0x000000, line_spacing=LINE_SPACING
+    font=arial, x=QUOTE_X, y=103, color=0x000000, line_spacing=LINE_SPACING
 )
 splash.append(author_label)
+
+battery_label = label.Label(
+    font=arial, x=250, y=115, color=0x000000, line_spacing=LINE_SPACING
+)
+splash.append(battery_label)
 
 print(f"Connecting to {ssid}")
 wifi.radio.connect(ssid, password)
@@ -172,9 +178,17 @@ def update_text(hour_min):
             after_label_2.text = "\n".join(wrapped)
 
     author = f"{quotes[hour_min][2]} - {quotes[hour_min][1]}"
-    author_label.text = adafruit_display_text.wrap_text_to_pixels(
+    wrapped_author = adafruit_display_text.wrap_text_to_pixels(
         author, 276, font=arial
-    )[0]
+    )
+    author_label.text = "\n".join(wrapped_author)
+    battery_pin = analogio.AnalogIn(board.VOLTAGE_MONITOR)
+    voltage = (battery_pin.value * 3.3) / 65536 * 2
+    battery_pin.deinit()
+    pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
+    print(f"Battery: {voltage:.2f}V ({pct}%)")
+    battery_label.text = f"{pct}%"
+    battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
     time.sleep(display.time_to_refresh + 0.1)
     display.refresh()
 
