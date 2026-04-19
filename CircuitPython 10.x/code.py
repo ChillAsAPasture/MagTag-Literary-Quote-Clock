@@ -93,7 +93,7 @@ after_label_2 = label.Label(
 splash.append(after_label_2)
 
 author_label = label.Label(
-    font=arial, x=QUOTE_X, y=103, color=0x000000, line_spacing=LINE_SPACING
+    font=arial, x=QUOTE_X, y=115, color=0x000000, line_spacing=LINE_SPACING
 )
 splash.append(author_label)
 
@@ -170,6 +170,10 @@ def update_text(hour_min, show_battery=False):
         author, 276, font=arial
     )
     author_label.text = "\n".join(wrapped_author)
+    if len(wrapped_author) > 1:
+        author_label.y = 103
+    else:
+        author_label.y = 115
     if show_battery:
         battery_pin = analogio.AnalogIn(board.VOLTAGE_MONITOR)
         voltage = (battery_pin.value * 3.3) / 65536 * 2
