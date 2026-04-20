@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2022 Eva Herrada for Adafruit Industries
+# SPDX-FileCopyrightText: 2026 ChillAsAPasture - power aware modifications
 # SPDX-License-Identifier: MIT
 
 from os import getenv
@@ -19,8 +20,18 @@ from adafruit_bitmap_font import bitmap_font
 import displayio
 from adafruit_display_shapes.rect import Rect
 
-# Get WiFi details and Adafruit IO keys, ensure these are setup in settings.toml
-# (visit io.adafruit.com if you need to create an account, or if you need your Adafruit IO key.)
+# settings.toml must contain these entries:
+#
+#   CIRCUITPY_WIFI_SSID = "YourWiFiName"
+#   CIRCUITPY_WIFI_PASSWORD = "YourWiFiPassword"
+#   ADAFRUIT_AIO_USERNAME = "your_adafruit_username"
+#   ADAFRUIT_AIO_KEY = "aio_xxxxxxxxxxxxxxxxxxxx"
+#   TIMEZONE = "America/New_York"
+#
+# Create a free Adafruit IO account at https://io.adafruit.com to get your
+# username and key. TIMEZONE must be a valid TZ database name, e.g.
+# "America/Chicago", "Europe/London", "Asia/Tokyo". Full list:
+# https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ssid = getenv("CIRCUITPY_WIFI_SSID")
 password = getenv("CIRCUITPY_WIFI_PASSWORD")
 aio_username = getenv("ADAFRUIT_AIO_USERNAME")
