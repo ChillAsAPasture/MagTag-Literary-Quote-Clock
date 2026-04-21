@@ -280,6 +280,10 @@ else:
             update_text(key, show_battery=True)
             break
 
+# Re-read seconds: the e-ink display refresh alone takes several seconds,
+# plus CSV parsing and layout, so the original sec value is stale
+sec = time.localtime().tm_sec
+
 # Find the next hour_min that has a quote
 sleep_seconds = None
 for offset in range(1, 1441):  # check up to 24 hours ahead
