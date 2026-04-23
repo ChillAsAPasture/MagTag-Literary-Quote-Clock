@@ -15,14 +15,11 @@ Instead of waking every 60 seconds, the code calculates when the next quote is a
 ### RTC + NVM Time Caching
 On first boot (or when the date changes), the code fetches the time from Adafruit IO over WiFi and sets the onboard RTC. The current date is saved to non-volatile memory (NVM). On subsequent wakes, if the NVM date matches the RTC date, the code skips WiFi entirely and reads the time from the RTC. This avoids a network round-trip on every single wake. This also means the clock automatically resyncs with the internet once per day at midnight, when the RTC date rolls over and no longer matches the saved NVM date.
 
-### Raw Socket HTTP Instead of `adafruit_io` Library
-Time is fetched via a direct HTTPS request to the Adafruit IO REST API using built-in modules (`ssl`, `socketpool`, `json`). This eliminates the need for `adafruit_io`, `adafruit_minimqtt`, `adafruit_requests`, `adafruit_connection_manager`, `adafruit_datetime`, and `adafruit_ticks` — saving significant RAM and flash space.
+### WiFi Shutdown
+WiFi is disabled immediately after the time is fetched and the RTC is set. The NeoPixel status LED is also turned off at the same time. This avoids the radio idling during the e-ink display refresh, which takes several seconds.
 
 ### Battery Voltage Display
 When the exact current time doesn't have a quote and a fallback is shown, the battery percentage is displayed in the corner of the screen. This can be triggered on demand by pressing any button between quote times to wake the device — since the current time won't match a quote, the fallback path runs and the battery level is shown.
-
-### Button Wake Support
-All four MagTag buttons (D11, D12, D14, D15) are configured as pin alarms, so pressing any button wakes the device from deep sleep and refreshes the display.
 
 ## Setup
 
@@ -41,10 +38,18 @@ Create a free account at [io.adafruit.com](https://io.adafruit.com) to get your 
 
 ## Required Libraries
 
-Only three libraries are needed in the `lib/` folder (available from the [Adafruit CircuitPython Bundle](https://circuitpython.org/libraries)):
+The following libraries are needed in the `lib/` folder (available from the [Adafruit CircuitPython Bundle](https://circuitpython.org/libraries)):
 
 - `adafruit_bitmap_font`
-- `adafruit_display_text`
+- `adafruit_connection_manager`
 - `adafruit_display_shapes`
+- `adafruit_display_text`
+- `adafruit_fakerequests`
+- `adafruit_io`
+- `adafruit_magtag`
+- `adafruit_portalbase`
+- `adafruit_requests`
+- `neopixel`
+- `simpleio`
 
-All other imports (`alarm`, `json`, `microcontroller`, `rtc`, `ssl`, `socketpool`, `wifi`, `board`, `analogio`, `displayio`) are CircuitPython built-ins.
+All other imports (`alarm`, `microcontroller`, `wifi`, `board`, `displayio`, `time`) are CircuitPython built-ins.

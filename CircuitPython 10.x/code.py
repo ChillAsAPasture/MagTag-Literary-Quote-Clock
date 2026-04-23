@@ -4,19 +4,16 @@
 
 from os import getenv
 import time
+import wifi
 
 import alarm
-import json
 import microcontroller
-import rtc
-import ssl
-import socketpool
-import wifi
 import adafruit_display_text
 from adafruit_display_text import label
 import board
-import analogio
 from adafruit_bitmap_font import bitmap_font
+from adafruit_magtag.peripherals import Peripherals
+from adafruit_magtag.network import Network
 import displayio
 from adafruit_display_shapes.rect import Rect
 
@@ -32,19 +29,18 @@ from adafruit_display_shapes.rect import Rect
 # username and key. TIMEZONE must be a valid TZ database name, e.g.
 # "America/Chicago", "Europe/London", "Asia/Tokyo". Full list:
 # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-ssid = getenv("CIRCUITPY_WIFI_SSID")
-password = getenv("CIRCUITPY_WIFI_PASSWORD")
-aio_username = getenv("ADAFRUIT_AIO_USERNAME")
-aio_key = getenv("ADAFRUIT_AIO_KEY")
 tz = getenv("TIMEZONE")
 
-if None in [ssid, password, aio_username, aio_key, tz]:
+if None in [getenv("CIRCUITPY_WIFI_SSID"), getenv("CIRCUITPY_WIFI_PASSWORD"),
+           getenv("ADAFRUIT_AIO_USERNAME"), getenv("ADAFRUIT_AIO_KEY"), tz]:
     raise RuntimeError(
         "WiFi and Adafruit IO settings are kept in settings.toml, "
         "please add them there. The settings file must contain "
         "'CIRCUITPY_WIFI_SSID', 'CIRCUITPY_WIFI_PASSWORD', "
         "'ADAFRUIT_AIO_USERNAME', 'ADAFRUIT_AIO_KEY' and 'TIMEZONE'."
     )
+
+peripherals = Peripherals()
 
 quotes = {}
 with open("quotes.csv", "r", encoding="UTF-8") as F:
@@ -131,7 +127,7 @@ def smart_split(text, font, width):
     return text
 
 
-def update_text(hour_min, show_battery=False):
+def update_text(hour_min, show_battery=False, clock_time=None):
     quote.text = (
         time_label.text
     ) = time_label_2.text = after_label.text = after_label_2.text = ""
@@ -192,49 +188,19 @@ def update_text(hour_min, show_battery=False):
         pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
         print(f"Battery: {voltage:.2f}V ({pct}%)")
         battery_label.text = f"{pct}%"
+    status_parts = []
+    if clock_time:
+        status_parts.append(clock_time)
+    voltage = peripherals.battery
+    pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
+    print(f"Battery: {voltage:.2f}V ({pct}%)")
+    if show_battery or pct < 20:
+        status_parts.append(f"{pct}%")
+    if status_parts:
+        battery_label.text = " ".join(status_parts)
         battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
     time.sleep(display.time_to_refresh + 0.1)
     display.refresh()
-
-
-def get_local_time():
-    """Fetch local time from Adafruit IO using the configured timezone."""
-    pool = socketpool.SocketPool(wifi.radio)
-    host = "io.adafruit.com"
-    path = f"/api/v2/{aio_username}/integrations/time/struct.json?x-aio-key={aio_key}&tz={tz}"
-    ctx = ssl.create_default_context()
-    sock = pool.socket(pool.AF_INET, pool.SOCK_STREAM)
-    sock.settimeout(10)
-    ssock = ctx.wrap_socket(sock, server_hostname=host)
-    ssock.connect((host, 443))
-    ssock.send(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
-    raw = b""
-    buf = bytearray(1024)
-    while True:
-        try:
-            n = ssock.recv_into(buf)
-            if n == 0:
-                break
-            raw += bytes(buf[:n])
-        except OSError:
-            break
-    ssock.close()
-    body = raw.decode().split("\r\n\r\n", 1)[1]
-    data = json.loads(body)
-    # Set the RTC so subsequent wakes can use it
-    r = rtc.RTC()
-    r.datetime = time.struct_time((
-        data["year"], data["mon"], data["mday"],
-        data["hour"], data["min"], data["sec"],
-        data["wday"], data["yday"], -1
-    ))
-    # Save today's date to NVM: [year_hi, year_lo, month, day]
-    nvm = microcontroller.nvm
-    nvm[0] = data["year"] >> 8
-    nvm[1] = data["year"] & 0xFF
-    nvm[2] = data["mon"]
-    nvm[3] = data["mday"]
-    return data["hour"], data["min"], data["sec"]
 
 
 def get_nvm_date():
@@ -247,7 +213,8 @@ def get_nvm_date():
 # Check if the RTC date matches the date saved in NVM
 rtc_now = time.localtime()
 nvm_year, nvm_month, nvm_day = get_nvm_date()
-if (rtc_now.tm_year == nvm_year and rtc_now.tm_mon == nvm_month
+if (nvm_year >= 2025 and rtc_now.tm_year == nvm_year
+        and rtc_now.tm_mon == nvm_month
         and rtc_now.tm_mday == nvm_day):
     # RTC is trustworthy, use it directly
     hour, minute, sec = rtc_now.tm_hour, rtc_now.tm_min, rtc_now.tm_sec
@@ -255,20 +222,28 @@ if (rtc_now.tm_year == nvm_year and rtc_now.tm_mon == nvm_month
 else:
     # Date mismatch — fetch from internet and sync RTC
     try:
-        print(f"Connecting to {ssid}")
-        wifi.radio.connect(ssid, password)
-        print(f"Connected to {ssid}!")
-        hour, minute, sec = get_local_time()
+        network = Network(status_neopixel=peripherals.neopixels)
+        network.get_local_time(location=tz)
+        now = time.localtime()
+        wifi.radio.enabled = False
+        peripherals.neopixels.fill(0)
+        hour, minute, sec = now.tm_hour, now.tm_min, now.tm_sec
+        # Save today's date to NVM
+        nvm = microcontroller.nvm
+        nvm[0] = now.tm_year >> 8
+        nvm[1] = now.tm_year & 0xFF
+        nvm[2] = now.tm_mon
+        nvm[3] = now.tm_mday
         print(f"Fetched time: {hour:02}:{minute:02}:{sec:02}")
     except (OSError, RuntimeError, ValueError) as e:
         print(f"Failed to fetch time: {e}, using RTC value")
         hour, minute, sec = rtc_now.tm_hour, rtc_now.tm_min, rtc_now.tm_sec
-        print(f"RTC time: {hour:02}:{minute:02}:{sec:02}")
 
 current_minutes = hour * 60 + minute
 hour_min = f"{hour:02}:{minute:02}"
 if hour_min in quotes:
-    update_text(hour_min)
+    print(f"Displaying quote for {hour_min} (current time {hour:02}:{minute:02}:{sec:02})")
+    update_text(hour_min, clock_time=f"{hour:02}:{minute:02}:{sec:02}")
 else:
     # Find the most recent quote before now
     for offset in range(1, 1441):
@@ -276,8 +251,8 @@ else:
         h, m = divmod(candidate, 60)
         key = f"{h:02}:{m:02}"
         if key in quotes:
-            print(f"No quote at {hour_min}, showing most recent: {key}")
-            update_text(key, show_battery=True)
+            print(f"No quote at {hour_min} (current time {hour:02}:{minute:02}:{sec:02}), showing most recent: {key}")
+            update_text(key, show_battery=True, clock_time=f"{hour:02}:{minute:02}:{sec:02}")
             break
 
 # Re-read seconds: the e-ink display refresh alone takes several seconds,
@@ -300,8 +275,4 @@ if sleep_seconds is None:
     print(f"No upcoming quotes found, sleeping {sleep_seconds}s")
 
 time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + sleep_seconds)
-pin_alarm = alarm.pin.PinAlarm(pin=board.D11, value=False, pull=True)
-pin_alarm_2 = alarm.pin.PinAlarm(pin=board.D12, value=False, pull=True)
-pin_alarm_3 = alarm.pin.PinAlarm(pin=board.D14, value=False, pull=True)
-pin_alarm_4 = alarm.pin.PinAlarm(pin=board.D15, value=False, pull=True)
-alarm.exit_and_deep_sleep_until_alarms(time_alarm, pin_alarm, pin_alarm_2, pin_alarm_3, pin_alarm_4)
+alarm.exit_and_deep_sleep_until_alarms(time_alarm)
