@@ -51,6 +51,15 @@ peripherals = Peripherals()
 # ---------------------------------------------------------------------------
 # Display setup
 # ---------------------------------------------------------------------------
+# The MagTag's 296x128 e-ink display, with a white background rectangle
+# and labels for each segment of the quote layout:
+#   quote        - the prose before the time reference
+#   time_label   - the bold time text (first line)
+#   time_label_2 - the bold time text (overflow to second line)
+#   after_label  - the prose after the time reference (first line)
+#   after_label_2- the prose after the time reference (overflow)
+#   author_label - book/author attribution at bottom-left
+#   battery_label- clock time and battery % at bottom-right
 display = board.DISPLAY
 splash = displayio.Group()
 display.root_group = splash
@@ -58,9 +67,9 @@ display.root_group = splash
 arial = bitmap_font.load_font("fonts/Arial-12.pcf")
 bold = bitmap_font.load_font("fonts/Arial-Bold-12.pcf")
 LINE_SPACING = 0.8
-HEIGHT = arial.get_bounding_box()[1]
-QUOTE_X = 10
-QUOTE_Y = 7
+HEIGHT = arial.get_bounding_box()[1]  # line height in pixels
+QUOTE_X = 10   # left margin
+QUOTE_Y = 7    # top margin (label y is baseline-centered)
 
 rect = Rect(0, 0, 296, 128, fill=0xFFFFFF, outline=0xFFFFFF)
 splash.append(rect)
@@ -125,6 +134,36 @@ def display_error_and_sleep(message):
     alarm.exit_and_deep_sleep_until_alarms()
 
 
+def get_battery_pct():
+    """Read the battery voltage and return the charge percentage (0-100)."""
+    voltage = peripherals.battery
+    # Map voltage to percentage: 3.2V = 0%, 4.2V = 100% (LiPo range)
+    pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
+    print(f"Battery: {voltage:.2f}V ({pct}%)")
+    return pct
+
+
+def should_show_status(battery_pct):
+    """Decide whether to show clock/battery instead of author/title.
+
+    Returns True (show status) on cold boot, button wake, or low battery.
+    Otherwise returns False (show author/title).
+    """
+    # Cold boot: wake_alarm is None on first power-on or hard reset
+    if alarm.wake_alarm is None:
+        print("Cold boot — showing status")
+        return True
+    # Button press
+    if isinstance(alarm.wake_alarm, alarm.pin.PinAlarm):
+        print("Button wake — showing status")
+        return True
+    # Low battery
+    if battery_pct < 20:
+        print(f"Low battery ({battery_pct}%) — showing status")
+        return True
+    return False
+
+
 def get_width(font, text):
     """Return the pixel width of text rendered in the given font."""
     return sum(font.get_glyph(ord(char)).shift_x for char in text)
@@ -144,8 +183,12 @@ def smart_split(text, font, width):
     return text
 
 
-def update_text(hour_min, show_battery=False, clock_time=None):
-    """Lay out and display a quote for the given time, then refresh the screen."""
+def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
+    """Lay out and display a quote for the given time, then refresh the screen.
+
+    If show_status is True, the bottom bar shows clock time and battery.
+    Otherwise it shows the author and book title.
+    """
 
     # -- Clear all labels --
     quote.text = ""
@@ -208,31 +251,31 @@ def update_text(hour_min, show_battery=False, clock_time=None):
             )
             after_label_2.text = "\n".join(wrapped)
 
-    # -- Render the author/book attribution --
-    author = f"{quotes[hour_min][2]} - {quotes[hour_min][1]}"
-    wrapped_author = adafruit_display_text.wrap_text_to_pixels(
-        author, 276, font=arial
-    )
-    author_label.text = "\n".join(wrapped_author)
-    if len(wrapped_author) > 1:
-        author_label.y = 103
+    # -- Render the bottom bar: either author/title or clock/battery --
+    if show_status:
+        # Show clock time and battery percentage
+        status_parts = []
+        if clock_time:
+            status_parts.append(clock_time)
+        if battery_pct is not None:
+            status_parts.append(f"{battery_pct}%")
+        if status_parts:
+            battery_label.text = " ".join(status_parts)
+            battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
     else:
-        author_label.y = 115
-
-    # -- Render the status bar (clock time and battery) --
-    status_parts = []
-    if clock_time:
-        status_parts.append(clock_time)
-    voltage = peripherals.battery
-    pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
-    print(f"Battery: {voltage:.2f}V ({pct}%)")
-    if show_battery or pct < 20:
-        status_parts.append(f"{pct}%")
-    if status_parts:
-        battery_label.text = " ".join(status_parts)
-        battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
+        # Show author and book title
+        author = f"{quotes[hour_min][2]} - {quotes[hour_min][1]}"
+        wrapped_author = adafruit_display_text.wrap_text_to_pixels(
+            author, 276, font=arial
+        )
+        author_label.text = "\n".join(wrapped_author)
+        if len(wrapped_author) > 1:
+            author_label.y = 103
+        else:
+            author_label.y = 115
 
     # -- Refresh the e-ink display --
+    # Must wait for the display's minimum refresh interval before calling refresh
     time.sleep(display.time_to_refresh + 0.1)
     display.refresh()
 
@@ -240,6 +283,8 @@ def update_text(hour_min, show_battery=False, clock_time=None):
 # ---------------------------------------------------------------------------
 # Quote data
 # ---------------------------------------------------------------------------
+# Each line is "HH:MM|before^time^after|author|title"
+# Keyed by HH:MM so we can look up quotes by time of day
 quotes = {}
 try:
     with open("quotes.csv", "r", encoding="UTF-8") as csv_file:
@@ -255,6 +300,10 @@ if not quotes:
 # ---------------------------------------------------------------------------
 # NVM (non-volatile memory) functions
 # ---------------------------------------------------------------------------
+# NVM persists across deep sleep resets, unlike RAM. We use it to:
+# 1. Store the date so we can tell if the RTC is still valid (avoiding
+#    unnecessary WiFi time fetches that drain battery)
+# 2. Track the last displayed quote to skip redundant e-ink refreshes
 # NVM layout:
 #   bytes 0-3: magic cookie "LitC"
 #   byte  4:   major version
@@ -310,6 +359,32 @@ def save_nvm(now, quote_key):
     nvm[base + 7] = quote_min
 
 
+def get_nvm_last_quote():
+    """Read the last displayed quote time from NVM. Returns 'HH:MM' or None."""
+    nvm = microcontroller.nvm
+    if not nvm_is_valid():
+        return None
+    base = NVM_DATA_OFFSET
+    return f"{nvm[base + 6]:02}:{nvm[base + 7]:02}"
+
+
+def should_update_display(quote_key):
+    """Return True if the display should be refreshed for this quote.
+
+    Skips the update if the same quote is already showing, unless
+    a button press woke us from deep sleep.
+    """
+    woke_from_button = isinstance(alarm.wake_alarm, alarm.pin.PinAlarm)
+    if woke_from_button:
+        print("Button wake — forcing display update")
+        return True
+    last_quote = get_nvm_last_quote()
+    if last_quote == quote_key:
+        print(f"Quote {quote_key} already displayed — skipping refresh")
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Time synchronization
 # ---------------------------------------------------------------------------
@@ -318,6 +393,10 @@ def get_current_time():
 
     Returns (hour, minute, second, time_fetched) where time_fetched is True
     if the time was synced from the network (and NVM should be updated).
+
+    The RTC keeps time during deep sleep but loses it on power loss.
+    We compare the RTC date against the NVM-saved date to decide whether
+    the RTC is trustworthy or we need to fetch time over WiFi.
     """
     rtc_now = time.localtime()
     nvm_year, nvm_month, nvm_day, _, _ = get_nvm_date()
@@ -332,6 +411,7 @@ def get_current_time():
         net = Network(status_neopixel=peripherals.neopixels)
         net.get_local_time(location=timezone)
         now = time.localtime()
+        # Disable WiFi immediately after sync to save power
         wifi.radio.enabled = False
         peripherals.neopixels.fill(0)
         print(f"Fetched time: {now.tm_hour:02}:{now.tm_min:02}:{now.tm_sec:02}")
@@ -345,30 +425,41 @@ def get_current_time():
 # Main
 # ---------------------------------------------------------------------------
 current_hour, current_minute, current_second, time_fetched = get_current_time()
-current_minutes = current_hour * 60 + current_minute
-current_time_key = f"{current_hour:02}:{current_minute:02}"
+current_minutes = current_hour * 60 + current_minute  # minutes since midnight
+current_time_key = f"{current_hour:02}:{current_minute:02}"  # "HH:MM" for quote lookup
 displayed_quote = None
 if current_time_key in quotes:
-    print(f"Displaying quote for {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02})")
-    update_text(current_time_key, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}")
     displayed_quote = current_time_key
 else:
     # Find the most recent quote before now
+    # Scans backwards through all 1440 minutes in a day (wrapping at midnight)
     for offset in range(1, 1441):
         candidate = (current_minutes - offset) % 1440
         candidate_hour, candidate_min = divmod(candidate, 60)
         candidate_key = f"{candidate_hour:02}:{candidate_min:02}"
         if candidate_key in quotes:
-            print(f"No quote at {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02}), showing most recent: {candidate_key}")
-            update_text(candidate_key, show_battery=True, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}")
             displayed_quote = candidate_key
             break
+
+# Determine bottom bar content once, used by both display paths
+battery_pct = get_battery_pct()
+show_status = should_show_status(battery_pct)
+
+# show_status is passed to update_text to choose author/title vs clock/battery
+if displayed_quote and should_update_display(displayed_quote):
+    if displayed_quote == current_time_key:
+        print(f"Displaying quote for {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02})")
+        update_text(displayed_quote, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
+    else:
+        print(f"No quote at {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02}), showing most recent: {displayed_quote}")
+        update_text(displayed_quote, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
 
 # Re-read seconds: the e-ink display refresh alone takes several seconds,
 # plus CSV parsing and layout, so the original second value is stale
 current_second = time.localtime().tm_sec
 
 # Find the next quote time
+# Scans forward through all 1440 minutes to find when to wake up next
 sleep_seconds = None
 for offset in range(1, 1441):  # check up to 24 hours ahead
     candidate = (current_minutes + offset) % 1440
@@ -382,7 +473,21 @@ for offset in range(1, 1441):  # check up to 24 hours ahead
 if sleep_seconds is None:
     display_error_and_sleep("No quotes found.\nCheck quotes.csv.")
 
+# Save state to NVM before sleeping so the next wake can check
+# whether the RTC is still valid and whether the display needs updating
 save_nvm(time.localtime(), displayed_quote)
 
+# -- Set up alarms: wake on next quote time or any button press --
+# Peripherals holds references to the button pins; release them first
+peripherals.deinit()
 time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + sleep_seconds)
-alarm.exit_and_deep_sleep_until_alarms(time_alarm)
+# value=False, pull=True: buttons are active-low with internal pull-ups
+button_alarms = [
+    alarm.pin.PinAlarm(pin=board.D11, value=False, pull=True),  # Button A
+    alarm.pin.PinAlarm(pin=board.D12, value=False, pull=True),  # Button B
+    alarm.pin.PinAlarm(pin=board.D14, value=False, pull=True),  # Button C
+    alarm.pin.PinAlarm(pin=board.D15, value=False, pull=True),  # Button D
+]
+# Deep sleep until either the timer fires or a button is pressed.
+# This is a terminal call — execution resumes from the top of code.py.
+alarm.exit_and_deep_sleep_until_alarms(time_alarm, *button_alarms)

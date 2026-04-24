@@ -12,14 +12,23 @@ The original code stays awake in a loop, sleeping between updates with `time.sle
 ### Smart Wake Scheduling
 Instead of waking every 60 seconds, the code calculates when the next quote is available and sleeps until exactly that time. This minimizes the number of wake cycles.
 
+### Button Wake
+All four MagTag buttons (A–D) are configured as wake sources. Pressing any button during deep sleep wakes the device immediately, which will display the current quote along with clock time and battery status.
+
 ### RTC + NVM Time Caching
-On first boot (or when the date changes), the code fetches the time from Adafruit IO over WiFi and sets the onboard RTC. The current date is saved to non-volatile memory (NVM). On subsequent wakes, if the NVM date matches the RTC date, the code skips WiFi entirely and reads the time from the RTC. This avoids a network round-trip on every single wake. This also means the clock automatically resyncs with the internet once per day at midnight, when the RTC date rolls over and no longer matches the saved NVM date.
+On first boot (or when the date changes), the code fetches the time from Adafruit IO over WiFi and sets the onboard RTC. The current date is saved to non-volatile memory (NVM) with a magic cookie header (`LitC`) and version byte for robustness. On subsequent wakes, if the NVM date matches the RTC date, the code skips WiFi entirely and reads the time from the RTC. This avoids a network round-trip on every single wake. The clock automatically resyncs with the internet once per day at midnight, when the RTC date rolls over and no longer matches the saved NVM date.
+
+### Smart Display Updates
+The last displayed quote is tracked in NVM. If the device wakes and the same quote would be shown again, the e-ink refresh is skipped to save power and reduce display wear. A button press always forces a refresh.
+
+### Author/Title vs. Status Bar
+By default, the bottom of the screen shows the book title and author for the displayed quote. On cold boot, button wake, or when battery is below 20%, it switches to showing the current clock time and battery percentage instead.
 
 ### WiFi Shutdown
 WiFi is disabled immediately after the time is fetched and the RTC is set. The NeoPixel status LED is also turned off at the same time. This avoids the radio idling during the e-ink display refresh, which takes several seconds.
 
-### Battery Voltage Display
-When the exact current time doesn't have a quote and a fallback is shown, the battery percentage is displayed in the corner of the screen. This can be triggered on demand by pressing any button between quote times to wake the device — since the current time won't match a quote, the fallback path runs and the battery level is shown.
+### Error Handling
+If `quotes.csv` is missing or empty, an error message is displayed on the e-ink screen and the device deep sleeps indefinitely (until reset).
 
 ## Setup
 
@@ -47,8 +56,11 @@ The following libraries are needed in the `lib/` folder (available from the [Ada
 - `adafruit_fakerequests`
 - `adafruit_io`
 - `adafruit_magtag`
+- `adafruit_minimqtt`
+- `adafruit_ntp`
 - `adafruit_portalbase`
 - `adafruit_requests`
+- `adafruit_ticks`
 - `neopixel`
 - `simpleio`
 
