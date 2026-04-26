@@ -473,9 +473,12 @@ for offset in range(1, 1441):  # check up to 24 hours ahead
 if sleep_seconds is None:
     display_error_and_sleep("No quotes found.\nCheck quotes.csv.")
 
-# Save state to NVM before sleeping so the next wake can check
-# whether the RTC is still valid and whether the display needs updating
-save_nvm(time.localtime(), displayed_quote)
+# Only save state to NVM only when we synced time from the internet (reduces NVM wear)
+# Normally we'd write every time, to include the last displayed quote in NVM
+# so that after a reset or power cycle we know what was last shown and can
+# avoid unnecessarily refreshing the display if nothing has changed.
+if time_fetched:
+    save_nvm(time.localtime(), displayed_quote)
 
 # -- Set up alarms: wake on next quote time or any button press --
 # Peripherals holds references to the button pins; release them first
