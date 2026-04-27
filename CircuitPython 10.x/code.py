@@ -80,7 +80,7 @@ COLOR_WHITE = 0xFFFFFF
 #   after_label  - the prose after the time reference (first line)
 #   after_label_2- the prose after the time reference (overflow)
 #   author_label - book/author attribution at bottom-left
-#   battery_label- clock time and battery % at bottom-right
+#   status_label - clock time and battery % at bottom-right
 display = board.DISPLAY
 splash = displayio.Group()
 display.root_group = splash
@@ -88,7 +88,7 @@ display.root_group = splash
 arial = bitmap_font.load_font("fonts/Arial-12.pcf")
 bold = bitmap_font.load_font("fonts/Arial-Bold-12.pcf")
 LINE_SPACING = 0.8
-HEIGHT = arial.get_bounding_box()[1]  # line height in pixels
+LINE_HEIGHT = arial.get_bounding_box()[1]  # line height in pixels
 QUOTE_X = 10   # left margin
 QUOTE_Y = 7    # top margin (label y is baseline-centered)
 TEXT_WIDTH = DISPLAY_WIDTH - 2 * QUOTE_X  # usable width for text wrapping
@@ -138,10 +138,10 @@ author_label = label.Label(
 )
 splash.append(author_label)
 
-battery_label = label.Label(
+status_label = label.Label(
     font=arial, x=250, y=BOTTOM_Y, color=COLOR_LIGHT_GRAY, line_spacing=LINE_SPACING
 )
-splash.append(battery_label)
+splash.append(status_label)
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
     time_label_2.text = ""
     after_label.text = ""
     after_label_2.text = ""
-    battery_label.text = ""
+    status_label.text = ""
 
     # -- Parse the quote into before/time/after segments --
     before, time_text, after = quotes[hour_min][0].split("^")
@@ -239,13 +239,13 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
     if time_text[0] != "\n":
         # Time starts on the same line as the preceding text
         time_label.x = time_x = QUOTE_X + width
-        time_label.y = time_y = QUOTE_Y + int((len(text) - 1) * HEIGHT * LINE_SPACING)
+        time_label.y = time_y = QUOTE_Y + int((len(text) - 1) * LINE_HEIGHT * LINE_SPACING)
         time_label.text = split_time[0]
 
     if "\n" in time_text:
         # Time wraps to a second line
         time_label_2.x = time_x = QUOTE_X
-        time_label_2.y = time_y = QUOTE_Y + int(len(text) * HEIGHT * LINE_SPACING)
+        time_label_2.y = time_y = QUOTE_Y + int(len(text) * LINE_HEIGHT * LINE_SPACING)
         wrapped = adafruit_display_text.wrap_text_to_pixels(
             split_time[1], TEXT_WIDTH, font=arial
         )
@@ -268,7 +268,7 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
         if "\n" in after:
             # After text wraps to a second line
             after_label_2.x = QUOTE_X
-            after_label_2.y = time_y + int(HEIGHT * LINE_SPACING)
+            after_label_2.y = time_y + int(LINE_HEIGHT * LINE_SPACING)
             wrapped = adafruit_display_text.wrap_text_to_pixels(
                 split_after[1], TEXT_WIDTH, font=arial
             )
@@ -283,8 +283,8 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
         if battery_pct is not None:
             status_parts.append(f"{battery_pct}%")
         if status_parts:
-            battery_label.text = " ".join(status_parts)
-            battery_label.x = DISPLAY_WIDTH - QUOTE_X - get_width(arial, battery_label.text)
+            status_label.text = " ".join(status_parts)
+            status_label.x = DISPLAY_WIDTH - QUOTE_X - get_width(arial, status_label.text)
     else:
         # Show author and book title
         author = f"{quotes[hour_min][2]} - {quotes[hour_min][1]}"
@@ -306,7 +306,14 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
 # ---------------------------------------------------------------------------
 # Quote data
 # ---------------------------------------------------------------------------
-# Each line is "HH:MM|before^time^after|author|title"
+# Each line in quotes.csv is pipe-delimited:
+#   HH:MM|before^time^after|title|author
+#
+# The quote text (field 2) uses ^ as a delimiter to split the prose into
+# three segments: text before the time reference, the time reference itself
+# (rendered in bold), and text after it. For example:
+#   "It was ^half past three^ when the door opened."
+#
 # Keyed by HH:MM so we can look up quotes by time of day
 quotes = {}
 try:
@@ -475,12 +482,14 @@ def resync_if_stale():
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+# Wake cycle: get time (RTC or network) → find matching quote → update
+# e-ink display → resync RTC if stale → calculate next wake time → deep sleep.
 current_hour, current_minute, current_second, time_fetched = get_current_time()
 current_minutes = current_hour * 60 + current_minute  # minutes since midnight
 current_time_key = f"{current_hour:02}:{current_minute:02}"  # "HH:MM" for quote lookup
-displayed_quote = None
+displayed_quote_key = None
 if current_time_key in quotes:
-    displayed_quote = current_time_key
+    displayed_quote_key = current_time_key
 else:
     # Find the most recent quote before now
     # Scans backwards through all minutes in a day (wrapping at midnight)
@@ -489,7 +498,7 @@ else:
         candidate_hour, candidate_min = divmod(candidate, 60)
         candidate_key = f"{candidate_hour:02}:{candidate_min:02}"
         if candidate_key in quotes:
-            displayed_quote = candidate_key
+            displayed_quote_key = candidate_key
             break
 
 # Determine bottom bar content once, used by both display paths
@@ -497,13 +506,13 @@ battery_pct = get_battery_pct()
 show_status = should_show_status(battery_pct)
 
 # show_status is passed to update_text to choose author/title vs clock/battery
-if displayed_quote and should_update_display(displayed_quote):
-    if displayed_quote == current_time_key:
+if displayed_quote_key and should_update_display(displayed_quote_key):
+    if displayed_quote_key == current_time_key:
         print(f"Displaying quote for {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02})")
-        update_text(displayed_quote, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
+        update_text(displayed_quote_key, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
     else:
-        print(f"No quote at {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02}), showing most recent: {displayed_quote}")
-        update_text(displayed_quote, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
+        print(f"No quote at {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02}), showing most recent: {displayed_quote_key}")
+        update_text(displayed_quote_key, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
 
 # Resync time from the internet, if needed, to prevent RTC drift
 # Done after the display update so a time correction won't cause the same
@@ -512,7 +521,7 @@ if displayed_quote and should_update_display(displayed_quote):
 resynced = resync_if_stale()
 
 if resynced or time_fetched:
-    save_nvm(time.localtime(), displayed_quote)
+    save_nvm(time.localtime(), displayed_quote_key)
 
 # Re-read time: the e-ink display refresh and possible resync take several
 # seconds, so the original values are stale
