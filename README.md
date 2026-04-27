@@ -10,13 +10,15 @@ This fork is modified to run on battery power for extended periods. The original
 The original code stays awake in a loop, sleeping between updates with `time.sleep()`. This version uses `alarm.exit_and_deep_sleep_until_alarms()` to put the MagTag into deep sleep between quote changes, drastically reducing power consumption.
 
 ### Smart Wake Scheduling
-Instead of waking every 60 seconds, the code calculates when the next quote is available and sleeps until exactly that time. This minimizes the number of wake cycles.
+Instead of waking every 60 seconds, the code calculates when the next quote is available and sleeps until that time. Sleep duration is capped at 60 minutes so the clock can periodically resync with the internet to correct RTC drift.
 
 ### Button Wake
 All four MagTag buttons (A–D) are configured as wake sources. Pressing any button during deep sleep wakes the device immediately, which will display the current quote along with clock time and battery status.
 
 ### RTC + NVM Time Caching
-On first boot (or when the date changes), the code fetches the time from Adafruit IO over WiFi and sets the onboard RTC. The current date is saved to non-volatile memory (NVM) with a magic cookie header (`LitC`) and version byte for robustness. On subsequent wakes, if the NVM date matches the RTC date, the code skips WiFi entirely and reads the time from the RTC. This avoids a network round-trip on every single wake. The clock automatically resyncs with the internet once per day at midnight, when the RTC date rolls over and no longer matches the saved NVM date.
+On first boot (or when the date changes), the code fetches the time from Adafruit IO over WiFi and sets the onboard RTC. The current date is saved to non-volatile memory (NVM) with a magic cookie header (`LitC`) and version byte for robustness. On subsequent wakes, if the NVM date matches the RTC date, the code skips WiFi entirely and reads the time from the RTC. This avoids a network round-trip on every single wake.
+
+The clock also resyncs with the internet every 30 minutes (configurable via `RESYNC_INTERVAL_MINUTES`) to correct RTC drift, in addition to the automatic resync at midnight when the date rolls over.
 
 ### Smart Display Updates
 The last displayed quote is tracked in NVM. If the device wakes and the same quote would be shown again, the e-ink refresh is skipped to save power and reduce display wear. A button press always forces a refresh.
@@ -26,6 +28,9 @@ By default, the bottom of the screen shows the book title and author for the dis
 
 ### WiFi Shutdown
 WiFi is disabled immediately after the time is fetched and the RTC is set. The NeoPixel status LED is also turned off at the same time. This avoids the radio idling during the e-ink display refresh, which takes several seconds.
+
+### Watchdog Timer
+A 60-second hardware watchdog timer is enabled at startup to prevent the device from hanging indefinitely (e.g. if a network call stalls). If any operation takes longer than 60 seconds, the device hard-resets and restarts. The watchdog is disabled immediately before entering deep sleep.
 
 ### Error Handling
 If `quotes.csv` is missing or empty, an error message is displayed on the e-ink screen and the device deep sleeps indefinitely (until reset).
@@ -64,4 +69,4 @@ The following libraries are needed in the `lib/` folder (available from the [Ada
 - `neopixel`
 - `simpleio`
 
-All other imports (`alarm`, `microcontroller`, `wifi`, `board`, `displayio`, `time`) are CircuitPython built-ins.
+All other imports (`alarm`, `microcontroller`, `watchdog`, `wifi`, `board`, `displayio`, `time`) are CircuitPython built-ins.

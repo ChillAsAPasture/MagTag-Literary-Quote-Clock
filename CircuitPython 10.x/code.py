@@ -11,6 +11,7 @@ import wifi
 
 import alarm
 import microcontroller
+from watchdog import WatchDogMode
 import adafruit_display_text
 from adafruit_display_text import label
 import board
@@ -47,7 +48,14 @@ if None in [getenv("CIRCUITPY_WIFI_SSID"), getenv("CIRCUITPY_WIFI_PASSWORD"),
     )
 
 peripherals = Peripherals()
-RESYNC_INTERVAL_MIN = 60   # minutes between internet time resyncs
+
+# Enable watchdog to force a reset if any operation hangs (e.g. network).
+# Must be disabled before entering deep sleep.
+WATCHDOG_TIMEOUT = 60  # seconds
+microcontroller.watchdog.timeout = WATCHDOG_TIMEOUT
+microcontroller.watchdog.mode = WatchDogMode.RESET
+
+RESYNC_INTERVAL_MINUTES = 30  # minutes between internet time resyncs
 DISPLAY_WIDTH = 296
 DISPLAY_HEIGHT = 128
 BOTTOM_Y = 115             # y position of the bottom status/author bar
@@ -145,6 +153,7 @@ def display_error_and_sleep(message):
     quote.text = message
     time.sleep(display.time_to_refresh + 0.1)
     display.refresh()
+    microcontroller.watchdog.mode = None
     alarm.exit_and_deep_sleep_until_alarms()
 
 
@@ -447,7 +456,7 @@ def get_current_time():
 
 
 def resync_if_stale():
-    """Resync time from the internet if it's been 60+ minutes since last sync.
+    """Resync time from the internet if RESYNC_INTERVAL_MINUTES have passed.
 
     Returns True if time was resynced, False otherwise.
     """
@@ -455,8 +464,8 @@ def resync_if_stale():
     rtc_now = time.localtime()
     rtc_minutes = rtc_now.tm_hour * 60 + rtc_now.tm_min
     nvm_minutes = nvm_hour * 60 + nvm_min
-    elapsed = rtc_minutes - nvm_minutes
-    if elapsed < RESYNC_INTERVAL_MIN:
+    elapsed = (rtc_minutes - nvm_minutes) % MINUTES_PER_DAY
+    if elapsed < RESYNC_INTERVAL_MINUTES:
         print(f"Last sync was {elapsed}m ago — no resync needed")
         return False
     print(f"Last sync was {elapsed}m ago — resyncing")
@@ -520,7 +529,13 @@ for offset in range(1, MINUTES_PER_DAY + 1):
     candidate_key = f"{candidate_hour:02}:{candidate_min:02}"
     if candidate_key in quotes:
         sleep_seconds = offset * 60 - current_second
-        print(f"Next quote at {candidate_key}, sleeping {sleep_seconds}s ({offset}m)")
+        # Cap sleep duration so we resync before drift accumulates
+        max_sleep = RESYNC_INTERVAL_MINUTES * 60
+        if sleep_seconds > max_sleep:
+            sleep_seconds = max_sleep
+            print(f"Next quote at {candidate_key} ({offset}m away), capping sleep to {max_sleep}s")
+        else:
+            print(f"Next quote at {candidate_key}, sleeping {sleep_seconds}s ({offset}m)")
         break
 
 if sleep_seconds is None:
@@ -539,4 +554,5 @@ button_alarms = [
 ]
 # Deep sleep until either the timer fires or a button is pressed.
 # This is a terminal call — execution resumes from the top of code.py.
+microcontroller.watchdog.mode = None
 alarm.exit_and_deep_sleep_until_alarms(time_alarm, *button_alarms)
