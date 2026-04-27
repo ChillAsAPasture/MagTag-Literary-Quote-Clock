@@ -47,6 +47,19 @@ if None in [getenv("CIRCUITPY_WIFI_SSID"), getenv("CIRCUITPY_WIFI_PASSWORD"),
     )
 
 peripherals = Peripherals()
+RESYNC_INTERVAL_MIN = 60   # minutes between internet time resyncs
+DISPLAY_WIDTH = 296
+DISPLAY_HEIGHT = 128
+BOTTOM_Y = 115             # y position of the bottom status/author bar
+LOW_BATTERY_PCT = 20       # show status bar below this battery %
+MIN_VALID_YEAR = 2025      # earliest year we trust in NVM
+BATTERY_MIN_V = 3.2        # LiPo empty voltage
+BATTERY_MAX_V = 4.2        # LiPo full voltage
+MINUTES_PER_DAY = 1440
+COLOR_BLACK = 0x000000
+COLOR_DARK_GRAY = 0x555555
+COLOR_LIGHT_GRAY = 0xAAAAAA
+COLOR_WHITE = 0xFFFFFF
 
 # ---------------------------------------------------------------------------
 # Display setup
@@ -70,54 +83,55 @@ LINE_SPACING = 0.8
 HEIGHT = arial.get_bounding_box()[1]  # line height in pixels
 QUOTE_X = 10   # left margin
 QUOTE_Y = 7    # top margin (label y is baseline-centered)
+TEXT_WIDTH = DISPLAY_WIDTH - 2 * QUOTE_X  # usable width for text wrapping
 
-rect = Rect(0, 0, 296, 128, fill=0xFFFFFF, outline=0xFFFFFF)
+rect = Rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, fill=COLOR_WHITE, outline=COLOR_WHITE)
 splash.append(rect)
 
 quote = label.Label(
     font=arial,
     x=QUOTE_X,
     y=QUOTE_Y,
-    color=0x000000,
+    color=COLOR_BLACK,
     line_spacing=LINE_SPACING,
 )
 
 splash.append(quote)
 time_label = label.Label(
     font=bold,
-    color=0x000000,
+    color=COLOR_BLACK,
     line_spacing=LINE_SPACING,
 )
 splash.append(time_label)
 
 time_label_2 = label.Label(
     font=bold,
-    color=0x000000,
+    color=COLOR_BLACK,
     line_spacing=LINE_SPACING,
 )
 splash.append(time_label_2)
 
 after_label = label.Label(
     font=arial,
-    color=0x000000,
+    color=COLOR_BLACK,
     line_spacing=LINE_SPACING,
 )
 splash.append(after_label)
 
 after_label_2 = label.Label(
     font=arial,
-    color=0x000000,
+    color=COLOR_BLACK,
     line_spacing=LINE_SPACING,
 )
 splash.append(after_label_2)
 
 author_label = label.Label(
-    font=arial, x=QUOTE_X, y=115, color=0x000000, line_spacing=LINE_SPACING
+    font=arial, x=QUOTE_X, y=BOTTOM_Y, color=COLOR_BLACK, line_spacing=LINE_SPACING
 )
 splash.append(author_label)
 
 battery_label = label.Label(
-    font=arial, x=250, y=115, color=0xAAAAAA, line_spacing=LINE_SPACING
+    font=arial, x=250, y=BOTTOM_Y, color=COLOR_LIGHT_GRAY, line_spacing=LINE_SPACING
 )
 splash.append(battery_label)
 
@@ -137,8 +151,8 @@ def display_error_and_sleep(message):
 def get_battery_pct():
     """Read the battery voltage and return the charge percentage (0-100)."""
     voltage = peripherals.battery
-    # Map voltage to percentage: 3.2V = 0%, 4.2V = 100% (LiPo range)
-    pct = max(0, min(100, int((voltage - 3.2) / (4.2 - 3.2) * 100)))
+    # Map voltage to percentage using LiPo range
+    pct = max(0, min(100, int((voltage - BATTERY_MIN_V) / (BATTERY_MAX_V - BATTERY_MIN_V) * 100)))
     print(f"Battery: {voltage:.2f}V ({pct}%)")
     return pct
 
@@ -158,7 +172,7 @@ def should_show_status(battery_pct):
         print("Button wake — showing status")
         return True
     # Low battery
-    if battery_pct < 20:
+    if battery_pct < LOW_BATTERY_PCT:
         print(f"Low battery ({battery_pct}%) — showing status")
         return True
     return False
@@ -176,7 +190,7 @@ def smart_split(text, font, width):
     for idx, word in enumerate(word_list):
         words += f" {word}"
         lwidth = get_width(font, words)
-        if width + lwidth > 276:
+        if width + lwidth > TEXT_WIDTH:
             word_list[idx] = "\n" + word_list[idx]
             text = " ".join(word_list)
             break
@@ -202,7 +216,7 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
     before, time_text, after = quotes[hour_min][0].split("^")
 
     # -- Render the "before" text (prose leading up to the time reference) --
-    text = adafruit_display_text.wrap_text_to_pixels(before, 276, font=arial)
+    text = adafruit_display_text.wrap_text_to_pixels(before, TEXT_WIDTH, font=arial)
     quote.text = "\n".join(text)
 
     # -- Measure the last line's width so the time label can continue inline --
@@ -224,7 +238,7 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
         time_label_2.x = time_x = QUOTE_X
         time_label_2.y = time_y = QUOTE_Y + int(len(text) * HEIGHT * LINE_SPACING)
         wrapped = adafruit_display_text.wrap_text_to_pixels(
-            split_time[1], 276, font=arial
+            split_time[1], TEXT_WIDTH, font=arial
         )
         time_label_2.text = "\n".join(wrapped)
 
@@ -247,7 +261,7 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
             after_label_2.x = QUOTE_X
             after_label_2.y = time_y + int(HEIGHT * LINE_SPACING)
             wrapped = adafruit_display_text.wrap_text_to_pixels(
-                split_after[1], 276, font=arial
+                split_after[1], TEXT_WIDTH, font=arial
             )
             after_label_2.text = "\n".join(wrapped)
 
@@ -261,7 +275,7 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
             status_parts.append(f"{battery_pct}%")
         if status_parts:
             battery_label.text = " ".join(status_parts)
-            battery_label.x = 296 - QUOTE_X - get_width(arial, battery_label.text)
+            battery_label.x = DISPLAY_WIDTH - QUOTE_X - get_width(arial, battery_label.text)
     else:
         # Show author and book title
         author = f"{quotes[hour_min][2]} - {quotes[hour_min][1]}"
@@ -270,9 +284,9 @@ def update_text(hour_min, show_status=False, clock_time=None, battery_pct=None):
         )
         author_label.text = "\n".join(wrapped_author)
         if len(wrapped_author) > 1:
-            author_label.y = 103
+            author_label.y = BOTTOM_Y - 12
         else:
-            author_label.y = 115
+            author_label.y = BOTTOM_Y
 
     # -- Refresh the e-ink display --
     # Must wait for the display's minimum refresh interval before calling refresh
@@ -388,6 +402,26 @@ def should_update_display(quote_key):
 # ---------------------------------------------------------------------------
 # Time synchronization
 # ---------------------------------------------------------------------------
+def fetch_network_time():
+    """Fetch time from the internet, sync the RTC, and shut down WiFi.
+
+    Returns True on success, False on failure. On success the RTC is
+    updated so callers can use time.localtime() for the current time.
+    """
+    try:
+        net = Network(status_neopixel=peripherals.neopixels)
+        net.get_local_time(location=timezone)
+        # Disable WiFi immediately after sync to save power
+        wifi.radio.enabled = False
+        peripherals.neopixels.fill(0)
+        now = time.localtime()
+        print(f"Fetched time: {now.tm_hour:02}:{now.tm_min:02}:{now.tm_sec:02}")
+        return True
+    except (OSError, RuntimeError, ValueError) as e:
+        print(f"Failed to fetch time: {e}, using RTC value")
+        return False
+
+
 def get_current_time():
     """Get the current time, fetching from the network if needed.
 
@@ -398,27 +432,35 @@ def get_current_time():
     We compare the RTC date against the NVM-saved date to decide whether
     the RTC is trustworthy or we need to fetch time over WiFi.
     """
-    rtc_now = time.localtime()
     nvm_year, nvm_month, nvm_day, _, _ = get_nvm_date()
-    if (nvm_year >= 2025 and rtc_now.tm_year == nvm_year
+    rtc_now = time.localtime()
+    if (nvm_year >= MIN_VALID_YEAR and rtc_now.tm_year == nvm_year
             and rtc_now.tm_mon == nvm_month
             and rtc_now.tm_mday == nvm_day):
         # RTC is trustworthy, use it directly
         print(f"RTC time: {rtc_now.tm_hour:02}:{rtc_now.tm_min:02}:{rtc_now.tm_sec:02}")
         return rtc_now.tm_hour, rtc_now.tm_min, rtc_now.tm_sec, False
     # Date mismatch — fetch from internet and sync RTC
-    try:
-        net = Network(status_neopixel=peripherals.neopixels)
-        net.get_local_time(location=timezone)
-        now = time.localtime()
-        # Disable WiFi immediately after sync to save power
-        wifi.radio.enabled = False
-        peripherals.neopixels.fill(0)
-        print(f"Fetched time: {now.tm_hour:02}:{now.tm_min:02}:{now.tm_sec:02}")
-        return now.tm_hour, now.tm_min, now.tm_sec, True
-    except (OSError, RuntimeError, ValueError) as e:
-        print(f"Failed to fetch time: {e}, using RTC value")
-        return rtc_now.tm_hour, rtc_now.tm_min, rtc_now.tm_sec, False
+    fetched = fetch_network_time()
+    now = time.localtime()
+    return now.tm_hour, now.tm_min, now.tm_sec, fetched
+
+
+def resync_if_stale():
+    """Resync time from the internet if it's been 60+ minutes since last sync.
+
+    Returns True if time was resynced, False otherwise.
+    """
+    _, _, _, nvm_hour, nvm_min = get_nvm_date()
+    rtc_now = time.localtime()
+    rtc_minutes = rtc_now.tm_hour * 60 + rtc_now.tm_min
+    nvm_minutes = nvm_hour * 60 + nvm_min
+    elapsed = rtc_minutes - nvm_minutes
+    if elapsed < RESYNC_INTERVAL_MIN:
+        print(f"Last sync was {elapsed}m ago — no resync needed")
+        return False
+    print(f"Last sync was {elapsed}m ago — resyncing")
+    return fetch_network_time()
 
 
 # ---------------------------------------------------------------------------
@@ -432,9 +474,9 @@ if current_time_key in quotes:
     displayed_quote = current_time_key
 else:
     # Find the most recent quote before now
-    # Scans backwards through all 1440 minutes in a day (wrapping at midnight)
-    for offset in range(1, 1441):
-        candidate = (current_minutes - offset) % 1440
+    # Scans backwards through all minutes in a day (wrapping at midnight)
+    for offset in range(1, MINUTES_PER_DAY + 1):
+        candidate = (current_minutes - offset) % MINUTES_PER_DAY
         candidate_hour, candidate_min = divmod(candidate, 60)
         candidate_key = f"{candidate_hour:02}:{candidate_min:02}"
         if candidate_key in quotes:
@@ -454,15 +496,26 @@ if displayed_quote and should_update_display(displayed_quote):
         print(f"No quote at {current_time_key} (current time {current_hour:02}:{current_minute:02}:{current_second:02}), showing most recent: {displayed_quote}")
         update_text(displayed_quote, show_status=show_status, clock_time=f"{current_hour:02}:{current_minute:02}:{current_second:02}", battery_pct=battery_pct)
 
-# Re-read seconds: the e-ink display refresh alone takes several seconds,
-# plus CSV parsing and layout, so the original second value is stale
-current_second = time.localtime().tm_sec
+# Resync time from the internet, if needed, to prevent RTC drift
+# Done after the display update so a time correction won't cause the same
+# quote to display twice. By saving NVM with the displayed quote here,
+# even if the correction rolls time back, the quote is marked as shown.
+resynced = resync_if_stale()
+
+if resynced or time_fetched:
+    save_nvm(time.localtime(), displayed_quote)
+
+# Re-read time: the e-ink display refresh and possible resync take several
+# seconds, so the original values are stale
+now = time.localtime()
+current_minutes = now.tm_hour * 60 + now.tm_min
+current_second = now.tm_sec
 
 # Find the next quote time
-# Scans forward through all 1440 minutes to find when to wake up next
+# Scans forward through all minutes to find when to wake up next
 sleep_seconds = None
-for offset in range(1, 1441):  # check up to 24 hours ahead
-    candidate = (current_minutes + offset) % 1440
+for offset in range(1, MINUTES_PER_DAY + 1):
+    candidate = (current_minutes + offset) % MINUTES_PER_DAY
     candidate_hour, candidate_min = divmod(candidate, 60)
     candidate_key = f"{candidate_hour:02}:{candidate_min:02}"
     if candidate_key in quotes:
@@ -472,13 +525,6 @@ for offset in range(1, 1441):  # check up to 24 hours ahead
 
 if sleep_seconds is None:
     display_error_and_sleep("No quotes found.\nCheck quotes.csv.")
-
-# Only save state to NVM only when we synced time from the internet (reduces NVM wear)
-# Normally we'd write every time, to include the last displayed quote in NVM
-# so that after a reset or power cycle we know what was last shown and can
-# avoid unnecessarily refreshing the display if nothing has changed.
-if time_fetched:
-    save_nvm(time.localtime(), displayed_quote)
 
 # -- Set up alarms: wake on next quote time or any button press --
 # Peripherals holds references to the button pins; release them first
