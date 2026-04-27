@@ -10,7 +10,7 @@ This fork is modified to run on battery power for extended periods. The original
 The original code stays awake in a loop, sleeping between updates with `time.sleep()`. This version uses `alarm.exit_and_deep_sleep_until_alarms()` to put the MagTag into deep sleep between quote changes, drastically reducing power consumption.
 
 ### Smart Wake Scheduling
-Instead of waking every 60 seconds, the code calculates when the next quote is available and sleeps until that time. Sleep duration is capped at 60 minutes so the clock can periodically resync with the internet to correct RTC drift.
+Instead of waking every 60 seconds, the code calculates when the next quote is available and sleeps until that time. Sleep duration is capped at `RESYNC_INTERVAL_MINUTES` (default 30) so the clock can periodically resync with the internet to correct RTC drift.
 
 ### Button Wake
 All four MagTag buttons (A–D) are configured as wake sources. Pressing any button during deep sleep wakes the device immediately, which will display the current quote along with clock time and battery status.
